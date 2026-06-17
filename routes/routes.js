@@ -199,111 +199,23 @@
 
 const express = require("express");
 const registeredData = require("../models/Register");
-const Otp = require("../models/OtpModel");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
-const nodemailer = require("nodemailer");
 const dotenv = require("dotenv");
 dotenv.config();
 
 const routes = express.Router();
 
-// Generate 6 digit OTP
-const OTP_generator = () => Math.floor(100000 + Math.random() * 900000);
-
-// Send OTP email
-const sendOTP = async (email, otp) => {
-  const transporter = nodemailer.createTransport({
-    host: process.env.HOST,
-    port: process.env.PORT,
-    auth: {
-      user: process.env.EMAIL,
-      pass: process.env.PASS,
-    },
-  });
-
-  const mailOptions = {
-    from: process.env.EMAIL,
-    to: email,
-    subject: "OTP for verification",
-    text: `Your OTP is ${otp}`,
-  };
-
-  await transporter.sendMail(mailOptions, (err) => {
-    if (err) {
-      console.error("Error sending email:", err);
-    } else {
-      console.log("Email sent");
-    }
-  });
-};
-
-routes.post("/sendOtp", async (req, res) => {
-  try {
-    let { email } = req.body;
-    if (!email) return res.status(400).json({ error: "Email is required" });
-
-    email = email.trim().toLowerCase();  // normalize here!
-
-    const userExist = await registeredData.findOne({ email });
-    if (userExist)
-      return res.status(409).json({ error: "User already exists" });
-
-    const otp = OTP_generator();
-
-    const result = await Otp.findOneAndUpdate(
-      { email },
-      { $set: { otp, createdAt: new Date() } },
-      { upsert: true, new: true }
-    );
-    console.log("OTP record saved to DB:", result);
-
-    console.log("Saved OTP:", otp);
-
-    await sendOTP(email, otp);
-
-    res.status(200).json({ message: "OTP sent to your email" });
-  } catch (err) {
-    console.error("sendOtp error:", err);
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
-
-// 2) Check OTP & verify email
-routes.post("/checkUser", async (req, res) => {
-  try {
-    let { email, otp } = req.body;
-    console.log("email:", email, "otp:", otp);
-
-    email = email.trim().toLowerCase();
-
-    const record = await Otp.findOne({ email });
-    console.log("OTP record:", record);
-
-    if (!record) {
-      return res.status(400).json({ error: "OTP expired or not found" });
-    }
-
-    if (record.otp !== parseInt(otp)) {
-      return res.status(400).json({ error: "Incorrect OTP" });
-    }
-
-    await Otp.deleteOne({ email });
-    res.status(200).json({ message: "Email verified successfully" });
-  } catch (err) {
-    console.error("checkUser error:", err);
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
+// NOTE: OTP / email verification removed. Registration is simplified.
 
 
 // 3) Register user (only if no user with email)
 routes.post("/register", async (req, res) => {
   try {
-    const { email, password, securityQuestion, securityQuestionAnswer } = req.body;
+    const { name, email, password, securityQuestion, securityQuestionAnswer } = req.body;
 
-    if (!email || !password || !securityQuestion || !securityQuestionAnswer)
-      return res.status(400).json({ error: "All fields are required." });
+    if (!name || !email || !password)
+      return res.status(400).json({ error: "Name, email and password are required." });
 
     const existingUser = await registeredData.findOne({ email });
     if (existingUser)
@@ -312,10 +224,11 @@ routes.post("/register", async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 10);
 
     const newUser = new registeredData({
+      name,
       email,
       password: hashedPassword,
-      securityQuestion,
-      securityQuestionAnswer,
+      securityQuestion: securityQuestion || null,
+      securityQuestionAnswer: securityQuestionAnswer ? securityQuestionAnswer.toLowerCase() : null,
     });
 
     await newUser.save();
@@ -352,26 +265,54 @@ routes.post("/login", async (req, res) => {
 });
 
 // 5) Change password with security question
+// Change password when user knows old password
 routes.post("/changePass", async (req, res) => {
   try {
-    const { email, password, securityQuestion, securityQuestionAnswer } = req.body;
+    const { email, oldPassword, newPassword } = req.body;
+    if (!email || !oldPassword || !newPassword)
+      return res.status(400).json({ error: "Email, oldPassword and newPassword are required" });
+
     const user = await registeredData.findOne({ email });
     if (!user) return res.status(404).json({ error: "User does not exist" });
 
-    if (
-      user.securityQuestion !== securityQuestion ||
-      user.securityQuestionAnswer.toLowerCase() !== securityQuestionAnswer.toLowerCase()
-    ) {
-      return res.status(400).json({ error: "Given details do not match" });
-    }
+    const match = await bcrypt.compare(oldPassword, user.password);
+    if (!match) return res.status(401).json({ error: "Old password does not match" });
 
-    const hashedPassword = await bcrypt.hash(password, 10);
-    user.password = hashedPassword;
+    const hashed = await bcrypt.hash(newPassword, 10);
+    user.password = hashed;
     await user.save();
 
     res.status(200).json({ message: "Password changed successfully" });
   } catch (error) {
     console.error("changePass error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Reset password using security question (when user forgot old password)
+routes.post("/forgotPass", async (req, res) => {
+  try {
+    const { email, securityQuestion, securityQuestionAnswer, newPassword } = req.body;
+    if (!email || !securityQuestion || !securityQuestionAnswer || !newPassword)
+      return res.status(400).json({ error: "Required fields are missing" });
+
+    const user = await registeredData.findOne({ email });
+    if (!user) return res.status(404).json({ error: "User does not exist" });
+
+    if (
+      user.securityQuestion !== securityQuestion ||
+      (user.securityQuestionAnswer || "").toLowerCase() !== securityQuestionAnswer.toLowerCase()
+    ) {
+      return res.status(400).json({ error: "Given details do not match" });
+    }
+
+    const hashed = await bcrypt.hash(newPassword, 10);
+    user.password = hashed;
+    await user.save();
+
+    res.status(200).json({ message: "Password reset successfully" });
+  } catch (error) {
+    console.error("forgotPass error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
