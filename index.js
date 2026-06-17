@@ -1,12 +1,17 @@
 const express = require("express");
+require("dotenv").config();
 const app = express();
 const cors = require("cors");
 app.use(express.json());
 const PORT = 4001;
 const mongoose = require("mongoose");
+const MONGODB_URL = process.env.MONGODB_URL;
+if (!MONGODB_URL) {
+  console.error("MONGODB_URL is not set in .env");
+  process.exit(1);
+}
 mongoose
-  .connect("mongodb://127.0.0.1:27017/Login")
-  // .connect("'mongodb://localhost:27017/")
+  .connect(MONGODB_URL)
   .then(() => {
     console.log("Database connected Successfully");
   })
