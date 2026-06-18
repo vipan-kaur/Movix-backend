@@ -15,7 +15,7 @@ mongoose
   .then(() => {
     console.log("Database connected Successfully");
   })
-  .catch(() => console.log("Error in connecting Database"));
+  .catch((err) => console.log("Error in connecting Database:", err));
 app.use(cors());
 const registerRoutes = require("./routes/routes");
 app.use("/signup", registerRoutes);
